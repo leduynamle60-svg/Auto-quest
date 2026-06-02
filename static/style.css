@@ -1,0 +1,169 @@
+body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    background: #12121e;
+    color: #eceff4;
+}
+
+.sidebar {
+    width: 240px;
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    background: #1f1f36;
+    padding: 24px 16px;
+    box-sizing: border-box;
+}
+
+.sidebar-logo {
+    font-size: 1.5rem;
+    margin-bottom: 8px;
+}
+
+.sidebar-subtitle {
+    font-size: 0.95rem;
+    color: #a3a8c5;
+    margin-bottom: 24px;
+}
+
+.nav-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.nav-item {
+    display: block;
+    padding: 10px 12px;
+    border-radius: 8px;
+    color: #cbd6f5;
+    text-decoration: none;
+    margin-bottom: 8px;
+}
+
+.nav-item.active,
+.nav-item:hover {
+    background: #323557;
+    color: #fff;
+}
+
+.sidebar-footer {
+    position: absolute;
+    bottom: 24px;
+    width: calc(100% - 32px);
+}
+
+.btn-logout {
+    width: 100%;
+    background: #ff5f6d;
+    border: none;
+    color: #fff;
+    padding: 10px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+}
+
+.main-content {
+    margin-left: 260px;
+    padding: 24px;
+}
+
+.page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.content {
+    display: grid;
+    gap: 20px;
+}
+
+.card {
+    background: #1b1b30;
+    border: 1px solid #2c2c4a;
+    border-radius: 16px;
+    overflow: hidden;
+}
+
+.card-header {
+    padding: 18px 24px;
+    border-bottom: 1px solid #2c2c4a;
+    font-weight: 700;
+}
+
+.card-body {
+    padding: 24px;
+}
+
+.small-card {
+    padding: 18px 24px;
+    text-align: center;
+}
+
+.stat-value {
+    font-size: 2.4rem;
+    margin: 12px 0 0;
+    color: #7fdbff;
+}
+
+.table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.table th,
+.table td {
+    text-align: left;
+    padding: 12px;
+    border-bottom: 1px solid #2c2c4a;
+}
+
+input[type="text"],
+input[type="password"],
+button {
+    width: 100%;
+    padding: 12px 14px;
+    background: #13132a;
+    border: 1px solid #2c2c4a;
+    border-radius: 10px;
+    color: #fff;
+    box-sizing: border-box;
+}
+
+button {
+    cursor: pointer;
+    margin-top: 12px;
+    background: #4f7cff;
+    border: none;
+}
+
+.message {
+    margin-top: 16px;
+    color: #b0c4ff;
+}
+
+.login-page {
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.login-card {
+    width: 100%;
+    max-width: 420px;
+    background: #1b1b30;
+    padding: 32px;
+    border-radius: 20px;
+    border: 1px solid #2c2c4a;
+}
+
+.alert {
+    background: #441111;
+    padding: 12px 14px;
+    border-radius: 10px;
+    margin-bottom: 16px;
+}

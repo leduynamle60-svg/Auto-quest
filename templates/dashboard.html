@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard — Dnam X Henxi Bot</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    {% include "sidebar.html" %}
+    <main class="main-content">
+        {% include "header.html" %}
+        <div class="content">
+            <div class="row">
+                <div class="card small-card">
+                    <h3>Tổng tài khoản</h3>
+                    <p class="stat-value">{{ stats.total_accounts }}</p>
+                </div>
+                <div class="card small-card">
+                    <h3>Worker đang chạy</h3>
+                    <p class="stat-value">{{ stats.total_workers }}</p>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <span>Thêm tài khoản mới</span>
+                </div>
+                <div class="card-body">
+                    <form id="add-account-form" class="action-form">
+                        <label>Discord token</label>
+                        <input type="text" name="token" placeholder="Nhập token" required>
+                        <button type="submit">Thêm tài khoản</button>
+                    </form>
+                    <div id="dashboard-message" class="message"></div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <span>Hoạt động gần đây</span>
+                </div>
+                <div class="card-body">
+                    {% if stats.recent_logs %}
+                    <table class="table">
+                        <thead><tr><th>User ID</th><th>Sự kiện</th><th>Chi tiết</th><th>Thời gian</th></tr></thead>
+                        <tbody>
+                        {% for log in stats.recent_logs %}
+                            <tr>
+                                <td>{{ log.user_id or 'N/A' }}</td>
+                                <td>{{ log.event or '...' }}</td>
+                                <td>{{ log.detail or '' }}</td>
+                                <td>{{ log.created_at or '' }}</td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                    {% else %}
+                    <p>Chưa có hoạt động nào.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </main>
+    {% include "js.html" %}
+</body>
+</html>

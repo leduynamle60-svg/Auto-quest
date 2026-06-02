@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Logs — Dnam X Henxi Bot</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    {% include "sidebar.html" %}
+    <main class="main-content">
+        {% include "header.html" %}
+        <div class="content">
+            <div class="card">
+                <div class="card-header">
+                    <span>Lịch sử hoạt động</span>
+                    <button onclick="clearLogs()" style="float:right; background:#e74c3c; color:white; border:none; padding:6px 14px; border-radius:6px; cursor:pointer;">🗑️ Xóa tất cả</button>
+                </div>
+                <div class="card-body">
+                    {% if logs %}
+                    <table class="table">
+                        <thead><tr><th>#</th><th>User</th><th>Sự kiện</th><th>Chi tiết</th><th>Thời gian</th></tr></thead>
+                        <tbody>
+                        {% for log in logs %}
+                            <tr>
+                                <td>{{ log.id }}</td>
+                                <td>{{ log.display_name or 'N/A' }}</td>
+                                <td>{{ log.event or '...' }}</td>
+                                <td>{{ log.detail or '' }}</td>
+                                <td>{{ log.created_at or '' }}</td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                    {% else %}
+                    <p>Chưa có log nào.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </main>
+    {% include "js.html" %}
+    <script>
+        function clearLogs() {
+            if (!confirm('Xóa hết log? Không thể khôi phục!')) return;
+            fetch('/api/clear-logs', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success) {
+                        alert('Đã xóa hết log!');
+                        location.reload();
+                    }
+                });
+        }
+    </script>
+</body>
+</html>

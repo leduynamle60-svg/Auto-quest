@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tài khoản —  Dnam X Henxi Bot</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    {% include "sidebar.html" %}
+    <main class="main-content">
+        {% include "header.html" %}
+        <div class="content">
+            <div class="card">
+                <div class="card-header">
+                    <span>Danh sách tài khoản</span>
+                </div>
+                <div class="card-body">
+                    {% if accounts %}
+                    <table class="table">
+                        <thead><tr><th>User ID</th><th>Username</th><th>Created</th><th>Trạng thái</th><th>Hành động</th></tr></thead>
+                        <tbody>
+                        {% for account in accounts %}
+                            <tr>
+                                <td>{{ account.user_id }}</td>
+                                <td>{{ account.username }}</td>
+                                <td>{{ account.created_at }}</td>
+                                <td>{% if account.user_id in running_ids %}Đang chạy{% else %}Dừng{% endif %}</td>
+                                <td>
+                                    {% if account.user_id in running_ids %}
+                                        <button type="button" onclick="postAction('/api/stop-worker', {user_id: '{{ account.user_id }}'})">Dừng</button>
+                                    {% else %}
+                                        <button type="button" onclick="postAction('/api/start-worker', {user_id: '{{ account.user_id }}'})">Bắt đầu</button>
+                                    {% endif %}
+                                    <button type="button" onclick="postAction('/api/remove-account', {user_id: '{{ account.user_id }}'})">Xóa</button>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                    {% else %}
+                    <p>Chưa có tài khoản nào.</p>
+                    {% endif %}
+                    <div id="accounts-message" class="message"></div>
+                </div>
+            </div>
+        </div>
+    </main>
+    {% include "js.html" %}
+</body>
+</html>
