@@ -32,7 +32,7 @@ templates = Jinja2Templates(directory=TEMPLATES_DIR)
 # ── Auth guard ─────────────────────────────────────────────────────────────────
 
 ADMIN_USER = os.environ.get("DASHBOARD_USER", "admin")
-ADMIN_PASS = os.environ.get("DASHBOARD_PASS", "admin123")
+ADMIN_PASS = os.environ.get("DASHBOARD_PASS", "$2y$10$yehvIfi6gtoh1rlKqU/4b.IUnSJChJokRQligLqidOQn.MX9sDpIW")
 
 
 def auth_check(request: Request) -> bool:
