@@ -10,6 +10,7 @@ from discord import app_commands
 from discord.ext import commands
 from datetime import datetime, timezone
 import database
+import aiohttp # Thêm dòng này vào đầu file
 from worker import start_worker, stop_worker, get_worker, get_running_accounts
 
 
@@ -64,6 +65,30 @@ def edit_dm_sync(msg: discord.Message, content: str):
         ).result(timeout=10)
     except Exception as e:
         log.warning(f"edit_dm_sync lỗi: {e}")
+
+        # ── Anti-Sleep/Self-Ping ──────────────────────────────────────────────────────
+
+async def keep_alive(bot):
+    """Tự ping chính web của mình mỗi 10 phút để tránh bị Render cho ngủ."""
+    # Thay link web thật ở đây
+    url = os.environ.get("WEB_URL", "https://auto-quest.onrender.com/") 
+    my_discord_id = 1115243210596429834 # Thay ID Discord của ní để nhận cảnh báo
+    
+    while True:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as resp:
+                    if resp.status != 200:
+                        log.warning(f"⚠️ Ping server thất bại, status: {resp.status}")
+                        # Gửi cảnh báo nếu web sập
+                        user = await bot.fetch_user(my_discord_id)
+                        await user.send(f"⚠️ **CẢNH BÁO:** Web đang bị lỗi (Status: {resp.status}). Check ngay!")
+                    else:
+                        log.info("✅ Pinged server successfully!")
+        except Exception as e:
+            log.error(f"❌ Lỗi khi tự ping: {e}")
+        
+        await asyncio.sleep(600) # Ping mỗi 10 phút
 
 
 # ── Message builders ──────────────────────────────────────────────────────────
@@ -224,6 +249,10 @@ async def on_ready():
     await tree.sync()
     log.info(f"✅ Bot online: {bot.user}")
     log.info("🔧 Commands synced")
+    
+    # Kích hoạt cơ chế chống ngủ
+    bot.loop.create_task(keep_alive(bot))
+    log.info("🛡️ Đã kích hoạt cơ chế chống ngủ (Self-Ping)")
 
 
 # ── Commands ──────────────────────────────────────────────────────────────────
