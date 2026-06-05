@@ -574,70 +574,79 @@ class QuestWorker(threading.Thread):
         database.log_quest(self._get_token_id(), name, qid, "WATCH_VIDEO", "completed", "success")
         self._dm_update()
 
-    def _complete_heartbeat(self, quest: dict):
-        name = get_quest_name(quest)
-        qid = quest["id"]
-        task_type = get_task_type(quest)
-        seconds_needed = get_seconds_needed(quest)
-        seconds_done = get_seconds_done(quest)
+def _complete_heartbeat(self, quest: dict):
+    name = get_quest_name(quest)
+    qid = quest["id"]
+    task_type = get_task_type(quest)
+    seconds_needed = get_seconds_needed(quest)
+    seconds_done = get_seconds_done(quest)
 
-        remaining = max(0, seconds_needed - seconds_done)
-        self._log(f"{task_type}: {name} (~{remaining // 60} phut con lai)", "info")
+    # Lấy application_id từ quest config
+    app_id = quest.get("config", {}).get("application", {}).get("id")
 
-        pid = random.randint(1000, 30000)
+    remaining = max(0, seconds_needed - seconds_done)
+    self._log(f"{task_type}: {name} (~{remaining // 60} phut con lai)", "info")
 
-        while seconds_done < seconds_needed and not self._stop.is_set():
-            try:
-                r = self._api.post(f"/quests/{qid}/heartbeat", {
-                    "stream_key": f"call:0:{pid}",
-                    "terminal": False,
-                })
-                if r.status_code == 200:
-                    body = r.json()
-                    progress_data = body.get("progress", {})
-                    if progress_data and task_type in progress_data:
-                        seconds_done = progress_data[task_type].get("value", seconds_done)
-                    percent = min(100, int(seconds_done / seconds_needed * 100)) if seconds_needed else 0
-                    remaining_sec = max(0, seconds_needed - seconds_done)
-                    remaining_min = remaining_sec // 60
-                    time_str = f"{int(seconds_done)}/{seconds_needed}s — còn ~{remaining_min} phút"
-                    self._log(f"  [{name}] {seconds_done:.0f}/{seconds_needed}s", "progress")
-                    self._dm_update(qid, percent, time_str)
+    pid = random.randint(1000, 30000)
 
-                    if body.get("completed_at") or seconds_done >= seconds_needed:
-                        self._stats["quests_completed"] += 1
-                        self._completed_ids.add(qid)
-                        if qid in self._quest_overview:
-                            self._quest_overview[qid]["status"] = "done"
-                        self._log(f"Hoan thanh: {name}", "ok")
-                        database.log_quest(self._get_token_id(), name, qid, task_type or "", "completed", "success")
-                        self._dm_update()
-                        return
-                elif r.status_code == 429:
-                    retry_after = r.json().get("retry_after", 10)
-                    self._log(f"Rate limited – cho {retry_after + 1}s", "warn")
-                    time.sleep(retry_after + 1)
-                    continue
-                else:
-                    self._log(f"Heartbeat loi ({r.status_code}): {r.text[:200]}", "warn")
-            except Exception as e:
-                self._log(f"Loi heartbeat: {e}", "error")
-            time.sleep(HEARTBEAT_INTERVAL)
+    # Build endpoint với application_ids nếu có
+    def _heartbeat_url():
+        if app_id:
+            return f"/quests/{qid}/heartbeat?application_ids={app_id}"
+        return f"/quests/{qid}/heartbeat"
 
+    while seconds_done < seconds_needed and not self._stop.is_set():
         try:
-            self._api.post(f"/quests/{qid}/heartbeat", {
+            r = self._api.post(_heartbeat_url(), {
                 "stream_key": f"call:0:{pid}",
-                "terminal": True,
+                "terminal": False,
             })
-        except Exception:
-            pass
-        self._stats["quests_completed"] += 1
-        self._completed_ids.add(qid)
-        if qid in self._quest_overview:
-            self._quest_overview[qid]["status"] = "done"
-        self._log(f"Hoan thanh: {name}", "ok")
-        database.log_quest(self._get_token_id(), name, qid, task_type or "", "completed", "success")
-        self._dm_update()
+            if r.status_code == 200:
+                body = r.json()
+                progress_data = body.get("progress", {})
+                if progress_data and task_type in progress_data:
+                    seconds_done = progress_data[task_type].get("value", seconds_done)
+                percent = min(100, int(seconds_done / seconds_needed * 100)) if seconds_needed else 0
+                remaining_sec = max(0, seconds_needed - seconds_done)
+                remaining_min = remaining_sec // 60
+                time_str = f"{int(seconds_done)}/{seconds_needed}s — còn ~{remaining_min} phút"
+                self._log(f"  [{name}] {seconds_done:.0f}/{seconds_needed}s", "progress")
+                self._dm_update(qid, percent, time_str)
+
+                if body.get("completed_at") or seconds_done >= seconds_needed:
+                    self._stats["quests_completed"] += 1
+                    self._completed_ids.add(qid)
+                    if qid in self._quest_overview:
+                        self._quest_overview[qid]["status"] = "done"
+                    self._log(f"Hoan thanh: {name}", "ok")
+                    database.log_quest(self._get_token_id(), name, qid, task_type or "", "completed", "success")
+                    self._dm_update()
+                    return
+            elif r.status_code == 429:
+                retry_after = r.json().get("retry_after", 10)
+                self._log(f"Rate limited – cho {retry_after + 1}s", "warn")
+                time.sleep(retry_after + 1)
+                continue
+            else:
+                self._log(f"Heartbeat loi ({r.status_code}): {r.text[:200]}", "warn")
+        except Exception as e:
+            self._log(f"Loi heartbeat: {e}", "error")
+        time.sleep(HEARTBEAT_INTERVAL)
+
+    try:
+        self._api.post(_heartbeat_url(), {
+            "stream_key": f"call:0:{pid}",
+            "terminal": True,
+        })
+    except Exception:
+        pass
+    self._stats["quests_completed"] += 1
+    self._completed_ids.add(qid)
+    if qid in self._quest_overview:
+        self._quest_overview[qid]["status"] = "done"
+    self._log(f"Hoan thanh: {name}", "ok")
+    database.log_quest(self._get_token_id(), name, qid, task_type or "", "completed", "success")
+    self._dm_update()
 
     def _complete_activity(self, quest: dict):
         name = get_quest_name(quest)
@@ -829,12 +838,21 @@ class QuestWorker(threading.Thread):
                 for q in enrolled_left:
                     name = get_quest_name(q)
                     qid = q.get("id")
-                    self._log(f'Bo qua quest: {name}', "warn")
+                    self._log(f'Bo qua quest: {name} (da nhan nhung chua hoan thanh)', "warn")
                     database.log_quest(self._get_token_id(), name, qid, get_task_type(q) or "", "skipped", "stopped_by_user")
 
         if self._session_id:
             database.stop_session(self._session_id, stop_reason)
         database.update_account_status(self.user_id, "offline")
+
+        # Auto xóa account sau khi cày xong hết
+        if stop_reason == "no_new_quests":
+            self._log("Hoan thanh tat ca quest! Tu dong xoa account...", "ok")
+            try:
+                database.remove_account(self.user_id)
+                self._log("Da xoa account khoi database!", "ok")
+            except Exception as e:
+                self._log(f"Loi xoa account: {e}", "error")
 
         self._unregister()
         self._log(f"=== FINAL STATS ===", "info")
