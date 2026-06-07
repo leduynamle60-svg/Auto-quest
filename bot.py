@@ -1,5 +1,5 @@
 """
-Henxi - Discord Quest Auto-Completer Bot
+Dnam - Discord Quest Auto-Completer Bot
 """
 
 import os
@@ -9,8 +9,10 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from datetime import datetime, timezone
+import random
 import database
-import aiohttp # Thêm dòng này vào đầu file
+import aiohttp
+import threading
 from worker import start_worker, stop_worker, get_worker, get_running_accounts
 
 
@@ -23,239 +25,176 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
 
-# ── DM helpers ────────────────────────────────────────────────────────────────
+# ── DM helpers (hỗ trợ Embed) ─────────────────────────────────────────────
 
-async def _send_dm_text(discord_user_id: int, content: str) -> discord.Message | None:
+async def _send_dm(discord_user_id: int, content):
     try:
         user = await bot.fetch_user(discord_user_id)
         dm = await user.create_dm()
-        return await dm.send(content)
+        if isinstance(content, discord.Embed):
+            return await dm.send(embed=content)
+        return await dm.send(str(content))
     except Exception as e:
-        log.warning(f"Không gửi được DM: {e}")
+        log.warning(f"Không gửi DM: {e}")
         return None
 
 
-async def _edit_dm_text(message: discord.Message, content: str):
+async def _edit_dm(message: discord.Message, content):
     try:
-        await message.edit(content=content)
+        if isinstance(content, discord.Embed):
+            await message.edit(embed=content)
+        else:
+            await message.edit(content=str(content))
     except Exception as e:
-        log.warning(f"Không edit được DM: {e}")
+        log.warning(f"Không edit DM: {e}")
 
 
-def send_dm_sync(discord_user_id: int, content: str):
+def send_dm_sync(discord_user_id: int, content):
     try:
         loop = bot.loop
         if not loop or not loop.is_running():
             return None
         return asyncio.run_coroutine_threadsafe(
-            _send_dm_text(discord_user_id, content), loop
+            _send_dm(discord_user_id, content), loop
         ).result(timeout=10)
     except Exception as e:
         log.warning(f"send_dm_sync lỗi: {e}")
         return None
 
 
-def edit_dm_sync(msg: discord.Message, content: str):
+def edit_dm_sync(msg: discord.Message, content):
     try:
         loop = bot.loop
         if not loop or not loop.is_running():
             return
         asyncio.run_coroutine_threadsafe(
-            _edit_dm_text(msg, content), loop
+            _edit_dm(msg, content), loop
         ).result(timeout=10)
     except Exception as e:
         log.warning(f"edit_dm_sync lỗi: {e}")
 
-        # ── Anti-Sleep/Self-Ping ──────────────────────────────────────────────────────
+
+# ── Anti-Sleep ────────────────────────────────────────────────────────────
 
 async def keep_alive(bot):
-    """Tự ping chính web của mình mỗi 10 phút để tránh bị Render cho ngủ."""
-    # Thay link web thật ở đây
-    url = os.environ.get("WEB_URL", "https://auto-quest.onrender.com/") 
-    my_discord_id = 1115243210596429834 # Thay ID Discord của ní để nhận cảnh báo
-    
+    url = os.environ.get("WEB_URL", "https://auto-quest.onrender.com/")
+    my_discord_id = 1115243210596429834
     while True:
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url) as resp:
                     if resp.status != 200:
-                        log.warning(f"⚠️ Ping server thất bại, status: {resp.status}")
-                        # Gửi cảnh báo nếu web sập
-                        user = await bot.fetch_user(my_discord_id)
-                        await user.send(f"⚠️ **CẢNH BÁO:** Web đang bị lỗi (Status: {resp.status}). Check ngay!")
+                        log.warning(f"Ping server thất bại: {resp.status}")
                     else:
-                        log.info("✅ Pinged server successfully!")
+                        log.info("✅ Ping server OK")
         except Exception as e:
-            log.error(f"❌ Lỗi khi tự ping: {e}")
-        
-        await asyncio.sleep(600) # Ping mỗi 10 phút
+            log.error(f"Lỗi ping: {e}")
+        await asyncio.sleep(600)
 
 
-# ── Message builders ──────────────────────────────────────────────────────────
+# ── Embed Builder ─────────────────────────────────────────────────────────
 
-def build_overview_msg(quests: list, username: str, user_id: str) -> str:
-    """Tin nhắn 1: Tổng quan danh sách quest (giống ảnh 1)"""
-    now = datetime.now(timezone.utc)
-
-    completed = []
-    pending = []
-    expired = []
-
-    for q in quests:
-        from worker import (get_quest_name, get_task_type, get_seconds_needed,
-                            is_completed, get_expires_at)
-        name = get_quest_name(q)
-        task_type = get_task_type(q) or "UNKNOWN"
-        seconds = get_seconds_needed(q)
-        expires = get_expires_at(q)
-
-        # Format thời gian
-        if seconds >= 60:
-            time_str = f"{seconds // 60}m"
-        else:
-            time_str = f"{seconds}s"
-
-        # Kiểm tra hết hạn
-        is_exp = False
-        if expires:
-            try:
-                exp_dt = datetime.fromisoformat(expires.replace("Z", "+00:00"))
-                if exp_dt <= now:
-                    is_exp = True
-            except Exception:
-                pass
-
-        entry = {"name": name, "task_type": task_type, "time_str": time_str}
-
-        if is_exp:
-            expired.append(entry)
-        elif is_completed(q):
-            completed.append(entry)
-        else:
-            pending.append(entry)
-
-    total = len(quests)
-    lines = [
-        f"📋 **Danh sách Quest**",
-        f"Tìm thấy **{total} quest**: ✅ Hoàn thành: **{len(completed)}** • ⌛ Cần làm: **{len(pending)}** • 🔴 Hết hạn: **{len(expired)}**",
-        "",
-    ]
-
-    for q in completed:
-        lines.append(f"✅ **{q['name']}**")
-        lines.append(f"┗ `{q['task_type']}` • {q['time_str']} • Hoàn thành")
-
-    for q in pending:
-        lines.append(f"⌛ **{q['name']}**")
-        lines.append(f"┗ `{q['task_type']}` • {q['time_str']} • Đã nhận")
-
-    # Chỉ hiện 3 quest hết hạn đầu
-    shown_expired = expired[:3]
-    for q in shown_expired:
-        lines.append(f"🔴 **{q['name']}**")
-        lines.append(f"┗ `{q['task_type']}` • {q['time_str']} • Hết hạn")
-    if len(expired) > 3:
-        lines.append(f"... và {len(expired) - 3} quest khác")
-
-    # Ước tính thời gian (đã fix lỗi ép kiểu)
-    try:
-        total_sec = sum(
-            int(q["time_str"].replace("m", "")) * 60 if "m" in q["time_str"]
-            else int(q["time_str"].replace("s", ""))
-            for q in pending
-        )
-        minutes = total_sec // 60
-        seconds = total_sec % 60
-        lines.append("")
-        lines.append(f"⏱️ **Ước tính hoàn thành**")
-        lines.append(f"~{minutes}p {seconds}s")
-    except Exception as e:
-        lines.append("")
-        lines.append(f"(Lỗi tính thời gian: {e})")
-
-    lines.append("")
-    lines.append(f"User ID: {user_id} • Quest Auto-Complete • {datetime.now().strftime('%H:%M %d/%m/%Y')}")
-
-    return "\n".join(lines)
-
-
-def build_progress_msg(quest_overview: dict, username: str, user_id: str,
-                       current_quest_id: str = None, current_percent: int = 0,
-                       current_time_str: str = None, all_done: bool = False) -> str:
-    """Tin nhắn 2: Tiến độ real-time (giống ảnh 2)"""
-    if all_done:
-        done_count = sum(1 for q in quest_overview.values() if q["status"] == "done")
-        total = len(quest_overview)
-        return (
-            f"🎉 **Hoàn thành tất cả Quest!**\n\n"
-            f"✅ Đã hoàn thành **{done_count}/{total}** quest\n"
-            f"Vào Discord nhận thưởng nhé!\n\n"
-            f"Đã xong: {done_count}/{total} quest • {datetime.now().strftime('%H:%M %d/%m/%Y')}"
-        )
-
-    done_count = sum(1 for q in quest_overview.values() if q["status"] == "done")
+def build_unified_progress_msg(
+    quest_overview: dict,
+    username: str,
+    user_id: str,
+    current_quest_id: str = None,
+    current_percent: int = 0,
+    current_time_str: str = None,
+    all_done: bool = False
+) -> discord.Embed:
+    
     total = len(quest_overview)
+    done = sum(1 for q in quest_overview.values() if q.get("status") == "done")
+    expired = sum(1 for q in quest_overview.values() if q.get("status") == "expired")
+    pending = total - done - expired
 
-    lines = [
-        f"❓ **Đang hoàn thành Quest... [{user_id[:6]}]**",
-        "",
-        f"📊 Tiến độ tất cả Quest",
-    ]
-
-    # Sắp xếp: đang cày lên đầu
-    sorted_quests = sorted(
-        quest_overview.items(),
-        key=lambda x: (
-            0 if x[0] == current_quest_id else
-            2 if x[1]["status"] == "done" else
-            1
+    if total > 0 and pending == 0:
+        embed = discord.Embed(
+            title="🎉 HOÀN THÀNH TẤT CẢ QUEST!",
+            description=f"✅ Đã farm xong **{done}/{total}** quest.\nVào Discord nhận thưởng đi **{username}**!",
+            color=0x2ecc71
         )
+        embed.set_footer(text=f"Auto by Henxi • {datetime.now().strftime('%H:%M')}")
+        return embed
+
+    embed = discord.Embed(
+        title="🔥 Henxi Auto Quest",
+        description=f"👤 **{username}** • `{user_id[-6:]}`",
+        color=0x5865F2
     )
 
-    for qid, q in sorted_quests:
-        name = q["name"]
-        status = q["status"]
-        target_sec = q.get("target_seconds", 0)
-        time_str = f"{target_sec // 60}m" if target_sec >= 60 else f"{target_sec}s"
+    embed.add_field(
+        name="📊 TỔNG QUAN",
+        value=f"**Tổng:** {total} | ✅ **{done}** | ⏳ **{pending}** | ⚠️ **{expired}**",
+        inline=False
+    )
 
-        if status == "expired":
+    # === PHẦN QUEST ĐANG CÀY (real-time) ===
+    pending_quests = [(qid, q) for qid, q in quest_overview.items() 
+                     if q.get("status") not in ("done", "expired")]
+    pending_quests.sort(key=lambda x: 0 if x[0] == current_quest_id else 1)
+
+    if current_quest_id and current_quest_id in quest_overview:
+        q = quest_overview[current_quest_id]
+        name = q["name"][:50] + "..." if len(q["name"]) > 50 else q["name"]
+        emoji = "🎮" if q["type"] in ("PLAY_ON_DESKTOP", "STREAM_ON_DESKTOP", "PLAY_ACTIVITY") else "🎬"
+        
+        bar = "█" * (current_percent // 5) + "░" * (20 - current_percent // 5)
+        time_info = current_time_str or f"~{q.get('target_seconds', 0)//60} phút"
+        
+        embed.add_field(
+            name=f"🔥 {emoji} ĐANG CÀY",
+            value=f"**{name}**\n`{bar}` **{current_percent}%** • {time_info}",
+            inline=False
+        )
+
+    # === HÀNG CHỜ (các quest còn lại) ===
+    queue = []
+    for qid, q in pending_quests:
+        if qid == current_quest_id:
             continue
-        elif status == "done":
-            bar = "█" * 20
-            lines.append(f"✅ **{name}**")
-            lines.append(f"[{bar}] 100% • 0s")
-            lines.append("")
-        elif qid == current_quest_id:
-            filled = int(current_percent / 100 * 20)
-            bar = "█" * filled + "░" * (20 - filled)
-            time_display = current_time_str or time_str
-            lines.append(f"❓ **{name}**")
-            lines.append(f"[{bar}] {current_percent}% • {time_display}")
-            lines.append("")
+        name = q["name"][:45] + "..." if len(q["name"]) > 45 else q["name"]
+        emoji = "🎮" if q["type"] in ("PLAY_ON_DESKTOP", "STREAM_ON_DESKTOP", "PLAY_ACTIVITY") else "🎬"
+        target_min = q.get("target_seconds", 900) // 60
+        queue.append(f"{emoji} {name} — ~{target_min} phút")
+
+    if queue:
+        embed.add_field(
+            name="📋 Hàng chờ",
+            value="\n".join(queue[:8]),
+            inline=False
+        )
+
+    # Thời gian còn lại tổng
+    remaining_minutes = 0
+    for qid, q in pending_quests:
+        if qid == current_quest_id and current_percent > 0:
+            target = q.get("target_seconds", 900)
+            done_sec = int(target * current_percent / 100)
+            remaining_minutes += max(0, (target - done_sec) // 60)
         else:
-            bar = "░" * 20
-            lines.append(f"⌛ **{name}**")
-            lines.append(f"[{bar}] 0% • {time_str}")
-            lines.append("")
+            remaining_minutes += q.get("target_seconds", 900) // 60
 
-    lines.append(f"Đã xong: {done_count}/{total} quest • {datetime.now().strftime('%H:%M %d/%m/%Y')}")
-    return "\n".join(lines)
+    time_str = f"{remaining_minutes//60}h {remaining_minutes%60}p" if remaining_minutes >= 60 else f"{remaining_minutes} phút"
+    embed.add_field(name="⏱️ Thời gian còn lại", value=f"**{time_str}**", inline=False)
+
+    embed.set_footer(text="Auto by Henxi • Update real-time")
+    return embed
 
 
-# ── Events ────────────────────────────────────────────────────────────────────
+# ── Events ────────────────────────────────────────────────────────────────
 
 @bot.event
 async def on_ready():
     await tree.sync()
+    await tree.sync()
     log.info(f"✅ Bot online: {bot.user}")
     log.info("🔧 Commands synced")
-    
-    # Kích hoạt cơ chế chống ngủ
     bot.loop.create_task(keep_alive(bot))
-    log.info("🛡️ Đã kích hoạt cơ chế chống ngủ (Self-Ping)")
 
 
-# ── Commands ──────────────────────────────────────────────────────────────────
+# ── Commands ──────────────────────────────────────────────────────────────
 
 @tree.command(name="quest", description="Thêm token & bắt đầu auto quest")
 @app_commands.describe(token="Token Discord của account", poll_interval="Chu kỳ kiểm tra (giây)")
@@ -266,30 +205,47 @@ async def quest_command(interaction: discord.Interaction, token: str, poll_inter
         accounts = database.get_all_accounts()
         account = next((a for a in accounts if a.get("token") == token), None)
         if not account:
-            await interaction.followup.send("❌ Không tìm thấy tài khoản sau khi thêm.", ephemeral=True)
+            await interaction.followup.send("❌ Không tìm thấy tài khoản.", ephemeral=True)
             return
 
         user_id = account["user_id"]
         username = account.get("global_name") or account.get("username") or user_id[:12]
         discord_user_id = interaction.user.id
 
-        # Gửi tin nhắn 1 ngay sau khi fetch quest
-        from worker import WorkerAPI, fetch_latest_build_number, is_completed, is_completable
-        import threading
+        from worker import WorkerAPI, fetch_latest_build_number, get_quest_name, get_task_type, get_seconds_needed, is_completed, get_expires_at
 
         def start_and_notify():
             try:
-                # Fetch quests để gửi tin nhắn 1
                 build = fetch_latest_build_number()
                 api = WorkerAPI(token, build)
                 r = api.get("/quests/@me")
+
+                quest_overview = {}
                 if r.status_code == 200:
                     data = r.json()
                     quests = data.get("quests", []) if isinstance(data, dict) else data
-                    overview_msg = build_overview_msg(quests, username, user_id)
-                    send_dm_sync(discord_user_id, overview_msg)
+                    for q in quests:
+                        qid = q.get("id")
+                        if not qid: continue
+                        expires = get_expires_at(q)
+                        is_expired = False
+                        if expires:
+                            try:
+                                exp_dt = datetime.fromisoformat(expires.replace("Z", "+00:00"))
+                                if exp_dt <= datetime.now(timezone.utc):
+                                    is_expired = True
+                            except:
+                                pass
+                        quest_overview[qid] = {
+                            "name": get_quest_name(q),
+                            "type": get_task_type(q) or "UNKNOWN",
+                            "status": "done" if is_completed(q) else ("expired" if is_expired else "pending"),
+                            "target_seconds": get_seconds_needed(q),
+                        }
 
-                # Start worker với DM callback
+                initial_embed = build_unified_progress_msg(quest_overview, username, user_id)
+                main_message = send_dm_sync(discord_user_id, initial_embed)
+
                 w = start_worker(
                     token, user_id, username,
                     poll_interval=poll_interval,
@@ -297,17 +253,18 @@ async def quest_command(interaction: discord.Interaction, token: str, poll_inter
                     dm_send=send_dm_sync,
                     dm_edit=edit_dm_sync,
                     discord_user_id=discord_user_id,
-                    build_progress_msg_func=build_progress_msg,
+                    build_progress_msg_func=build_unified_progress_msg,
                 )
+
+                if w and main_message:
+                    w._main_msg = main_message
+
             except Exception as e:
                 log.warning(f"start_and_notify lỗi: {e}")
 
         threading.Thread(target=start_and_notify, daemon=True).start()
 
-        await interaction.followup.send(
-            f"✅ Đã khởi động worker cho **{username}**!\nTôi sẽ gửi DM tiến độ quest cho bạn.",
-            ephemeral=True
-        )
+        await interaction.followup.send(f"✅ Đã khởi động worker cho **{username}**!", ephemeral=True)
 
     except Exception as e:
         await interaction.followup.send(f"❌ Lỗi: {str(e)}", ephemeral=True)
@@ -320,9 +277,8 @@ async def stopquest_command(interaction: discord.Interaction):
     if not account:
         await interaction.followup.send("❌ Bạn chưa có tài khoản nào.", ephemeral=True)
         return
-    user_id = account["user_id"]
-    stop_worker(user_id)
-    await interaction.followup.send("✅ Đã dừng worker của bạn!", ephemeral=True)
+    stop_worker(account["user_id"])
+    await interaction.followup.send("✅ Đã dừng worker!", ephemeral=True)
 
 
 @tree.command(name="queststatus", description="Xem trạng thái worker đang chạy")
@@ -332,14 +288,12 @@ async def queststatus_command(interaction: discord.Interaction):
     if not running:
         await interaction.followup.send("Không có worker nào đang chạy.", ephemeral=True)
         return
-    lines = []
-    for w in running:
-        stats = w.get("stats", {})
-        lines.append(
-            f"**{w['username']}** (`{w['user_id']}`)\n"
-            f"  Status: {w['status']} — {w['message']}\n"
-            f"  Completed: {stats.get('quests_completed', 0)} | Cycles: {stats.get('cycles_run', 0)}"
-        )
+    lines = [
+        f"**{w['username']}** (`{w['user_id']}`)\n"
+        f"  Status: {w['status']} — {w['message']}\n"
+        f"  Completed: {w.get('stats', {}).get('quests_completed', 0)}"
+        for w in running
+    ]
     await interaction.followup.send("\n\n".join(lines), ephemeral=True)
 
 
@@ -360,17 +314,16 @@ async def questlist_command(interaction: discord.Interaction):
     await interaction.followup.send("\n".join(lines), ephemeral=True)
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# ── Main ─────────────────────────────────────────────────────────────────
 
 def run_bot():
     database.init_db()
     log.info("📦 Database initialized")
-    log.info("🚀 Starting quest bot...")
     token = os.environ.get("DISCORD_BOT_TOKEN")
     if token:
         bot.run(token)
     else:
-        log.error("DISCORD_BOT_TOKEN không tìm thấy trong file .env!")
+        log.error("DISCORD_BOT_TOKEN không tìm thấy!")
 
 
 if __name__ == "__main__":
