@@ -22,6 +22,7 @@ SUPPORTED_TASKS = [
     "STREAM_ON_DESKTOP",
     "PLAY_ACTIVITY",
     "WATCH_VIDEO_ON_MOBILE",
+    "ACHIEVEMENT_IN_ACTIVITY",
 ]
 
 
@@ -297,11 +298,9 @@ class QuestWorker(threading.Thread):
         if self._logger:
             self._logger(log_msg)
 
-
     def _dm_update(self, current_quest_id: str = None, current_percent: int = 0, current_time_str: str = None):
         if not self._dm_send or not self._discord_user_id:
             return
-
         try:
             if self._build_progress_msg_func:
                 content = self._build_progress_msg_func(
@@ -320,9 +319,8 @@ class QuestWorker(threading.Thread):
                 self._main_msg = self._dm_send(self._discord_user_id, content)
             elif self._dm_edit:
                 self._dm_edit(self._main_msg, content)
-
         except Exception as e:
-            self._log(f"Lỗi _dm_update: {e}", "error")
+            self._log(f"Loi _dm_update: {e}", "error")
 
     def _fetch_build(self):
         self._log("Dang lay build number...")
@@ -360,19 +358,16 @@ class QuestWorker(threading.Thread):
 
     def _build_quest_overview(self, quests: list):
         now = datetime.now(timezone.utc)
-        self._quest_overview.clear()  # Xóa cũ để tránh duplicate
+        self._quest_overview.clear()
         seen_ids = set()
-
         for q in quests:
             qid = q.get("id")
             if not qid or qid in seen_ids:
                 continue
             seen_ids.add(qid)
-
             name = get_quest_name(q)
             task_type = get_task_type(q) or "UNKNOWN"
             target_sec = get_seconds_needed(q)
-
             expires = get_expires_at(q)
             expired = False
             if expires:
@@ -382,14 +377,12 @@ class QuestWorker(threading.Thread):
                         expired = True
                 except Exception:
                     pass
-
             if expired:
                 status = "expired"
             elif qid in self._completed_ids or is_completed(q):
                 status = "done"
             else:
                 status = "pending"
-
             self._quest_overview[qid] = {
                 "name": name,
                 "type": task_type,
@@ -427,6 +420,15 @@ class QuestWorker(threading.Thread):
                 return False
         return False
 
+    def _complete_quest_success(self, qid: str, name: str, task_type: str):
+        self._stats["quests_completed"] += 1
+        self._completed_ids.add(qid)
+        if qid in self._quest_overview:
+            self._quest_overview[qid]["status"] = "done"
+        self._log(f"Hoan thanh: {name}", "ok")
+        database.log_quest(self._get_token_id(), name, qid, task_type or "", "completed", "success")
+        self._dm_update()
+
     def _complete_video(self, quest: dict):
         name = get_quest_name(quest)
         qid = quest["id"]
@@ -458,13 +460,7 @@ class QuestWorker(threading.Thread):
                     if r.status_code == 200:
                         body = r.json()
                         if body.get("completed_at"):
-                            self._stats["quests_completed"] += 1
-                            self._completed_ids.add(qid)
-                            if qid in self._quest_overview:
-                                self._quest_overview[qid]["status"] = "done"
-                            self._log(f"Hoan thanh: {name}", "ok")
-                            database.log_quest(self._get_token_id(), name, qid, "WATCH_VIDEO", "completed", "success")
-                            self._dm_update()
+                            self._complete_quest_success(qid, name, "WATCH_VIDEO")
                             return
                         seconds_done = min(seconds_needed, timestamp)
                         percent = min(100, int(seconds_done / seconds_needed * 100))
@@ -489,13 +485,7 @@ class QuestWorker(threading.Thread):
             self._api.post(f"/quests/{qid}/video-progress", {"timestamp": seconds_needed})
         except Exception:
             pass
-        self._stats["quests_completed"] += 1
-        self._completed_ids.add(qid)
-        if qid in self._quest_overview:
-            self._quest_overview[qid]["status"] = "done"
-        self._log(f"Hoan thanh: {name}", "ok")
-        database.log_quest(self._get_token_id(), name, qid, "WATCH_VIDEO", "completed", "success")
-        self._dm_update()
+        self._complete_quest_success(qid, name, "WATCH_VIDEO")
 
     def _complete_heartbeat(self, quest: dict):
         name = get_quest_name(quest)
@@ -505,78 +495,10 @@ class QuestWorker(threading.Thread):
         seconds_done = get_seconds_done(quest)
         app_id = quest.get("config", {}).get("application", {}).get("id")
 
-        self._log(f"{task_type}: {name} (~{seconds_needed//60} phút)", "info")
+        remaining = max(0, seconds_needed - seconds_done)
+        self._log(f"{task_type}: {name} (~{remaining // 60} phut con lai)", "info")
 
-        pid = random.randint(10000, 99999)
-        stream_key = f"call:0:{pid}"
-
-        def _heartbeat_url():
-            if app_id:
-                return f"/quests/{qid}/heartbeat?application_ids={app_id}"
-            return f"/quests/{qid}/heartbeat"
-
-        while seconds_done < seconds_needed and not self._stop.is_set():
-            try:
-                payload = {
-                    "stream_key": stream_key,
-                    "terminal": False,
-                }
-
-                # Payload mạnh cho Stream
-                if task_type == "STREAM_ON_DESKTOP":
-                    payload["activity"] = {
-                        "application_id": str(app_id) if app_id else "0",
-                        "type": 1,
-                        "name": name[:60],
-                        "details": "Streaming on Discord",
-                        "timestamps": {"start": int(time.time() * 1000)}
-                    }
-                    payload["metadata"] = {
-                        "source": "desktop",
-                        "platform": "win32"
-                    }
-
-                r = self._api.post(_heartbeat_url(), payload)
-
-                if r.status_code == 200:
-                    body = r.json()
-                    progress_data = body.get("progress", {})
-
-                    if task_type in progress_data:
-                        seconds_done = progress_data[task_type].get("value", seconds_done)
-                    else:
-                        seconds_done = min(seconds_needed, seconds_done + 15)  # tự tăng
-
-                    percent = min(100, int(seconds_done / seconds_needed * 100)) if seconds_needed else 0
-                    time_str = f"{int(seconds_done)}/{seconds_needed}s — còn ~{(seconds_needed - seconds_done)//60} phút"
-
-                    self._log(f"  [{name}] {seconds_done:.0f}/{seconds_needed}s ({percent}%)", "progress")
-                    self._dm_update(qid, percent, time_str)
-
-                    if body.get("completed_at") or seconds_done >= seconds_needed:
-                        self._complete_quest_success(qid, name, task_type)
-                        return
-
-                elif r.status_code == 429:
-                    retry = r.json().get("retry_after", 15)
-                    self._log(f"Rate limited – chờ {retry}s", "warn")
-                    time.sleep(retry + 3)
-                    continue
-                else:
-                    self._log(f"Heartbeat lỗi ({r.status_code}): {r.text[:150]}", "warn")
-
-            except Exception as e:
-                self._log(f"Lỗi heartbeat: {e}", "error")
-
-            time.sleep(15)
-
-        # Kết thúc
-        try:
-            self._api.post(_heartbeat_url(), {"stream_key": stream_key, "terminal": True})
-        except:
-            pass
-
-        self._complete_quest_success(qid, name, task_type)
+        pid = random.randint(1000, 30000)
 
         def _heartbeat_url():
             if app_id:
@@ -602,13 +524,7 @@ class QuestWorker(threading.Thread):
                     self._dm_update(qid, percent, time_str)
 
                     if body.get("completed_at") or seconds_done >= seconds_needed:
-                        self._stats["quests_completed"] += 1
-                        self._completed_ids.add(qid)
-                        if qid in self._quest_overview:
-                            self._quest_overview[qid]["status"] = "done"
-                        self._log(f"Hoan thanh: {name}", "ok")
-                        database.log_quest(self._get_token_id(), name, qid, task_type or "", "completed", "success")
-                        self._dm_update()
+                        self._complete_quest_success(qid, name, task_type)
                         return
                 elif r.status_code == 429:
                     retry_after = r.json().get("retry_after", 10)
@@ -628,17 +544,12 @@ class QuestWorker(threading.Thread):
             })
         except Exception:
             pass
-        self._stats["quests_completed"] += 1
-        self._completed_ids.add(qid)
-        if qid in self._quest_overview:
-            self._quest_overview[qid]["status"] = "done"
-        self._log(f"Hoan thanh: {name}", "ok")
-        database.log_quest(self._get_token_id(), name, qid, task_type or "", "completed", "success")
-        self._dm_update()
+        self._complete_quest_success(qid, name, task_type)
 
     def _complete_activity(self, quest: dict):
         name = get_quest_name(quest)
         qid = quest["id"]
+        task_type = get_task_type(quest)
         seconds_needed = get_seconds_needed(quest)
         seconds_done = get_seconds_done(quest)
 
@@ -656,8 +567,8 @@ class QuestWorker(threading.Thread):
                 if r.status_code == 200:
                     body = r.json()
                     progress_data = body.get("progress", {})
-                    if progress_data and "PLAY_ACTIVITY" in progress_data:
-                        seconds_done = progress_data["PLAY_ACTIVITY"].get("value", seconds_done)
+                    if progress_data and task_type in progress_data:
+                        seconds_done = progress_data[task_type].get("value", seconds_done)
                     percent = min(100, int(seconds_done / seconds_needed * 100)) if seconds_needed else 0
                     remaining_sec = max(0, seconds_needed - seconds_done)
                     remaining_min = remaining_sec // 60
@@ -666,19 +577,17 @@ class QuestWorker(threading.Thread):
                     self._dm_update(qid, percent, time_str)
 
                     if body.get("completed_at") or seconds_done >= seconds_needed:
-                        self._stats["quests_completed"] += 1
-                        self._completed_ids.add(qid)
-                        if qid in self._quest_overview:
-                            self._quest_overview[qid]["status"] = "done"
-                        self._log(f"Hoan thanh: {name}", "ok")
-                        database.log_quest(self._get_token_id(), name, qid, "PLAY_ACTIVITY", "completed", "success")
-                        self._dm_update()
+                        self._complete_quest_success(qid, name, task_type)
                         return
                 elif r.status_code == 429:
                     retry_after = r.json().get("retry_after", 10)
                     self._log(f"Rate limited – cho {retry_after + 1}s", "warn")
                     time.sleep(retry_after + 1)
                     continue
+                elif r.status_code == 403:
+                    self._log(f"Quest {name} khong the tu dong hoan thanh, bo qua!", "warn")
+                    self._completed_ids.add(qid)
+                    return
                 else:
                     self._log(f"Activity heartbeat loi ({r.status_code}): {r.text[:200]}", "warn")
             except Exception as e:
@@ -692,22 +601,7 @@ class QuestWorker(threading.Thread):
             })
         except Exception:
             pass
-        self._stats["quests_completed"] += 1
-        self._completed_ids.add(qid)
-        if qid in self._quest_overview:
-            self._quest_overview[qid]["status"] = "done"
-        self._log(f"Hoan thanh: {name}", "ok")
-        database.log_quest(self._get_token_id(), name, qid, "PLAY_ACTIVITY", "completed", "success")
-        self._dm_update()
-
-    def _complete_quest_success(self, qid, name, task_type):
-        self._stats["quests_completed"] += 1
-        self._completed_ids.add(qid)
-        if qid in self._quest_overview:
-            self._quest_overview[qid]["status"] = "done"
-        self._log(f"Hoàn thành: {name}", "ok")
-        database.log_quest(self._get_token_id(), name, qid, task_type or "", "completed", "success")
-        self._dm_update()
+        self._complete_quest_success(qid, name, task_type)
 
     def _process_quest(self, quest: dict):
         qid = quest.get("id")
@@ -715,6 +609,7 @@ class QuestWorker(threading.Thread):
         task_type = get_task_type(quest)
         if not task_type:
             self._log(f'"{name}" – task khong ho tro, bo qua', "warn")
+            self._completed_ids.add(qid)
             return
         if qid in self._completed_ids:
             return
@@ -726,7 +621,7 @@ class QuestWorker(threading.Thread):
             self._complete_video(quest)
         elif task_type in ("PLAY_ON_DESKTOP", "STREAM_ON_DESKTOP"):
             self._complete_heartbeat(quest)
-        elif task_type == "PLAY_ACTIVITY":
+        elif task_type in ("PLAY_ACTIVITY", "ACHIEVEMENT_IN_ACTIVITY"):
             self._complete_activity(quest)
         self._completed_ids.add(qid)
 
@@ -783,6 +678,7 @@ class QuestWorker(threading.Thread):
                     if is_enrolled(q) and not is_completed(q) and is_completable(q)
                     and q.get("id") not in self._completed_ids
                 ]
+
                 if actionable:
                     self._log(f"{len(actionable)} quest(s) can hoan thanh:", "info")
                     for q in actionable:
@@ -805,8 +701,13 @@ class QuestWorker(threading.Thread):
             if self._cycles_without_new_quest >= self._max_cycles_no_quest:
                 self._log(f"Khong co quest moi sau {self._max_cycles_no_quest} lan quet - tu dong dung!", "warn")
                 stop_reason = "no_new_quests"
-                if self._dm_send and self._discord_user_id:
-                    content = self._build_dm_content()
+                if self._dm_send and self._discord_user_id and self._build_progress_msg_func:
+                    content = self._build_progress_msg_func(
+                        quest_overview=self._quest_overview,
+                        username=self.username,
+                        user_id=self.user_id,
+                        all_done=True
+                    )
                     if self._main_msg and self._dm_edit:
                         self._dm_edit(self._main_msg, content)
                 break
@@ -840,7 +741,6 @@ class QuestWorker(threading.Thread):
             database.stop_session(self._session_id, stop_reason)
         database.update_account_status(self.user_id, "offline")
 
-        # Auto xóa account sau khi cày xong hết
         if stop_reason == "no_new_quests":
             self._log("Hoan thanh tat ca quest! Tu dong xoa account...", "ok")
             try:
@@ -850,7 +750,7 @@ class QuestWorker(threading.Thread):
                 self._log(f"Loi xoa account: {e}", "error")
 
         self._unregister()
-        self._log(f"=== FINAL STATS ===", "info")
+        self._log("=== FINAL STATS ===", "info")
         self._log(f"Completed: {self._stats['quests_completed']} quests", "info")
         self._log(f"Enrolled: {self._stats['quests_enrolled']} quests", "info")
         self._log(f"Cycles: {self._stats['cycles_run']}", "info")
