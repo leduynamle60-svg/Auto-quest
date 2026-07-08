@@ -344,11 +344,38 @@ class QuestWorker(threading.Thread):
                 elif isinstance(data, list):
                     return data
                 return []
-            elif r.status_code == 429:
-                retry_after = r.json().get("retry_after", 10)
-                self._log(f"Rate limited – cho {retry_after}s", "warn")
-                time.sleep(retry_after)
-                return self._fetch_quests()
+            while True:
+                try:
+                    r = self._api.get("/quests/@me")
+
+                    if r.status_code == 200:
+                        data = r.json()
+                        if isinstance(data, dict):
+                            return data.get("quests", [])
+                        elif isinstance(data, list):
+                            return data
+                        return []
+
+                    elif r.status_code == 429:
+                        retry_after = float(r.json().get("retry_after", 10))
+                        self._log(f"Rate limited - chờ {retry_after:.1f}s", "warn")
+                        time.sleep(retry_after)
+                        continue
+
+                    else:
+                        self._log(f"Lỗi {r.status_code}", "warn")
+                        return []
+
+                except Exception as e:
+                    self._log(str(e), "error")
+                    return []
+                
+                    rate_limit_count += 1
+
+                    if rate_limit_count >= 10:
+                        self._log("Discord block quá lâu - dừng worker.", "warn")
+                        return []
+        
             else:
                 self._log(f"Quest fetch loi ({r.status_code}): {r.text[:200]}", "warn")
                 return []
@@ -687,7 +714,19 @@ class QuestWorker(threading.Thread):
                         self._process_quest(q)
                         had_new_quests = True
                 else:
-                    self._log("Khong co quest can hoan thanh", "info")
+                    pending = [
+                        q for q in quests
+                        if is_enrolled(q)
+                        and not is_completed(q)
+                        and is_completable(q)
+                    ]
+
+                    if not pending:
+                        self._log("✅ Đã hoàn thành tất cả quest. Worker tự dừng.", "ok")
+                        stop_reason = "completed"
+                        break
+
+                self._log("Khong co quest can hoan thanh", "info")
             else:
                 self._log("Khong co quest nao, tiep tuc quet...", "info")
 
