@@ -77,7 +77,7 @@ def edit_dm_sync(msg: discord.Message, content):
 # ── Anti-Sleep ────────────────────────────────────────────────────────────
 
 async def keep_alive(bot):
-    url = os.environ.get("WEB_URL", "https://auto-quest.onrender.com")
+    url = os.environ.get("WEB_URL", "https://auto-quest-ik8o.onrender.com")
     my_discord_id = 1115243210596429834
     while True:
         try:
