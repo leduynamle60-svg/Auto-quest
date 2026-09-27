@@ -6,6 +6,7 @@ import os
 import asyncio
 import logging
 import discord
+from dotenv import load_dotenv
 from discord import app_commands
 from discord.ext import commands
 from datetime import datetime, timezone
@@ -18,6 +19,8 @@ from worker import start_worker, stop_worker, get_worker, get_running_accounts
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 log = logging.getLogger("henxi")
+
+load_dotenv()
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -81,7 +84,7 @@ async def keep_alive(bot):
     my_discord_id = 1115243210596429834
     while True:
         try:
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession() as session: 
                 async with session.get(url) as resp:
                     if resp.status != 200:
                         log.warning(f"Ping server thất bại: {resp.status}")
